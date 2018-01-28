@@ -1,0 +1,197 @@
+
+ /*
+Data Logger Code Version Proto 0.10
+Designed to run on an Uno R3 type Arduino
+Schematic Rev 2.0
+
+
+Rev History
+0.10 Proto 1
+
+I/O DEFINITIONS
+A0 - System battery voltage
+A1 - Current Measurement of Hall Effect Transducer
+A2 - Temperature Thermistor 1
+A3 - Temperature Thermistor 2
+A4 - I2C SDA
+A5 - I2C SCL
+D0 - Rx
+D1 - Tx
+D2 - (INT1 pin) Not used
+D3 - (INT2 pin) Not used
+D4 - Blue Current Sensor Status LED 
+D5 - Yellow Current Sensor Status LED 
+D6 - SD Card detect
+D7 - SD Card present LED (L1)
+D8 - Not used
+D9 - Not used
+D10 - Chip Select for SD card
+D11 - Not used
+D12 - Not used
+D13 - Arduino D13 LED
+
+I2C Bus Addresses
+0 - LCD Display
+X - RTC
+
+*/
+
+/*-------------------------------------------------------------
+*                        INCLUDES
+*-------------------------------------------------------------*/
+/* remove libraries for testing 
+#include <SPI.h>
+#include <SD.h>
+#include <Wire.h>
+#include "RTClib.h"
+#include <Adafruit_LiquidCrystal.h>
+Adafruit_LiquidCrystal lcd(0); //Default address #0 A0-A2 not jumpered
+*/
+/*----------------------------------------------------------
+ *                      Define Variables 
+ *----------------------------------------------------------- */                  
+
+ const int currentFlowLED = 4;     //blue LED
+ const int currentZeroLED= 5;      //yellow LED
+ const int chipSelect= 10;         //SD card chip select
+ const int cardDetect= 6;          //SD card detect on data logger shield
+ const int cardPresentLED = 7;     //SD card present L1 on data logger shield
+ const int battVolt = A0;          //system battery voltage
+ const int currentTransducer= A1;  //load current
+ const int temp1 = A2;             //temperature 1
+ const int temp2 = A3;             //temperature 2
+ const int thermistorNominal=10000;
+ const int temperatureNominal=25; 
+ const int bCoefficient=3950;
+ const int seriesResistor=10000;   //nominal value, measure for better accuracy
+ unsigned int timeCounter = 0;     //counter incremented by TIMER INT ISR
+ unsigned int x = 0;               //used with timeCounter to determine 5 min
+ float sensorValue = 0.0;          //should this be float or int?
+ float sysVoltage = 0.0;           //battery voltage 
+ float loadAmps = 0.0;             //load current
+ float loadPower = 0.0;            //loadAmps x sysVoltage
+ float temperature1 = 0.0;         //temperature 1
+ float temperature2 = 0.0;         //temperature 2
+ float steinhart = 0.0;
+ unsigned long startTime = 0;      //used in delay timers
+ unsigned long delay1000 = 1000;   //delay 1000ms
+ unsigned long delay500 = 500;     //delay 500ms
+ unsigned long delay200 = 200;     //delay 200ms 
+ volatile byte operatingState = 0; //initialize op state to "not logging"
+ boolean cardPresent = LOW;        //initialize to "no card installed"
+
+
+//String Variables
+ String firmwareVer="0.10";
+
+//End of Variables Definition ------------------------- 
+
+
+/*----------------------------------------------
+ * FUNCTION DEFINITIONS
+ -----------------------------------------------*/
+
+
+/* ----------------------------------------------
+ *SETUP LOOP
+-------------------------------------------------*/                 
+
+void setup() {
+ 
+   analogReference(DEFAULT);
+   Serial.begin(9600);                 //THIS CAN BE REMOVED AFTER TESTING
+   /*REMOVE UNTIL LCD IS INSTALLED
+   lcd.begin(16,2);                    //set up LCD number of rows and columns
+   */
+   pinMode(currentFlowLED,OUTPUT);     //blue current sensor OK LED
+   digitalWrite(currentFlowLED,LOW);
+   pinMode(currentZeroLED,OUTPUT);     //yellow current sensor fault LED
+   digitalWrite(currentZeroLED,LOW);
+   pinMode(chipSelect,OUTPUT);         //SD card chip select
+   digitalWrite(chipSelect,LOW);
+   pinMode(cardDetect,INPUT_PULLUP);   //SD card detect on data logger shield
+  
+ //post flash
+Serial.print("Enter flash loop"); //for debug
+Serial.println(""); //for debug
+
+for (int i=0; i <= 9; i++){
+      digitalWrite(currentFlowLED, HIGH);
+      startTime = millis();        //set startTime for delay loop
+      while ((startTime + delay500) > millis() ) {
+      } //500 mS delay
+      digitalWrite(currentFlowLED, LOW);
+      startTime = millis();        //set startTime for delay loop
+      while ((startTime + delay500) > millis() ) {
+      } //500 mS delay
+   } //end of POST Flash for loop
+Serial.print("leave flash loop"); //for debug
+Serial.println(""); //for debug
+
+/*
+digitalWrite(currentFlowLED, HIGH);
+delay(1000);
+digitalWrite(currentFlowLED, LOW);
+delay(1000);
+digitalWrite(currentFlowLED, HIGH);
+delay(1000);
+digitalWrite(currentFlowLED, LOW);
+delay(1000);
+digitalWrite(currentFlowLED, HIGH);
+delay(1000);
+digitalWrite(currentFlowLED, LOW);
+delay(1000);
+
+*/
+
+/*REMOVE UNTIL LCD IS INSTALLED
+//set up lcd and and send welcome message 
+
+    lcd.clear();
+    startTime = millis();           //set startTime for delay loop
+    while ((startTime + delay500) > millis() ) {
+    } //500 mS delay
+    lcd.setCursor(0,0);            // Print opening message to the LCD
+    lcd.print("Autonomous Power");
+    lcd.setCursor(1,1);
+    lcd.print("Energy Monitor");
+    startTime = millis();          //set startTime for delay loop
+    while ((startTime + delay500) > millis() ) {
+    } //500 mS delay
+    lcd.clear();
+    lcd.setCursor(0,0);
+    lcd.print("F/W Version ");
+    lcd.setCursor(12,0);
+    lcd.print(firmwareVer);
+    startTime = millis();          //set startTime for delay loop
+    while ((startTime + 2000) > millis() ) {
+    } //2 Sec delay
+*/
+    interrupts();                  // enable all interrupts
+
+} //closing brace for setup loop
+
+/*---------------------------------------------
+ *MAIN LOOP
+----------------------------------------------*/
+void loop() {
+//Serial Print for debug
+//measureVoltage();
+/*Serial.print("Int Counter = "); //for debug
+Serial.println(timeCounter); //for debug
+Serial.print("Operating state = "); //for debug
+Serial.println(operatingState); //for debug
+Serial.print("Battery Voltage = "); //for debug
+Serial.println(sysVoltage); //for debug
+Serial.print("Load Current = "); //for debug
+Serial.println(loadAmps); //for debug
+loadPower = sysVoltage * loadAmps;
+Serial.print("Load Power = "); //for debug
+Serial.println(loadPower); //for debug
+startTime = millis(); //set startTime for delay loop
+ while ((startTime + delay500) > millis() ) {
+ } //500 mS delay
+*/
+
+   
+} //closing brace for main loop
